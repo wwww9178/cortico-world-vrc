@@ -1,0 +1,23 @@
+{
+  "_说明": "把 worlds.vrc 这一段合并进 Coopanion 的 data/home/companion/config.json。这里是最小可用配置。",
+  "worlds": {
+    "vrc": {
+      "enabled": true,
+      "host": "127.0.0.1",
+      "outPort": 9000,
+      "inPort": 9001,
+      "chatboxEnabled": true,
+      "chatboxLimit": 144,
+      "chatboxIntervalMs": 1600,
+      "notifySound": false,
+      "typingIndicator": true,
+      "voiceEnabled": false,
+      "voiceProvider": "off",
+      "voiceDevice": "虚拟扬声器 (VB-Audio Cable A)",
+      "voiceGain": 1,
+      "voiceMix": "solo",
+      "paramEnabled": false,
+      "activeWithinSec": 120
+    }
+  }
+}
