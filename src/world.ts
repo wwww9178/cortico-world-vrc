@@ -81,8 +81,13 @@ export class VrcWorld implements World {
   }
 
   envPromptVars(): Record<string, string> {
-    if (!this.online()) return { 'vrc.state': '' };
+    const log = this.logTail.current();
+    if (!this.online()) {
+      // 离线也可能刚在日志里看到过世界名（比如刚退出），那就不算完全没信息
+      return { 'vrc.state': log.worldName ? `VRChat 不在线（日志里最后一次所在世界：${log.worldName}）。` : '' };
+    }
     const bits = [`VRChat 在线${this.avatarId ? '（化身 ' + this.avatarId.slice(0, 12) + '）' : ''}`];
+    if (log.worldName) bits.push(`世界「${log.worldName}」`);
     if (this.lastInbound) bits.push(`最近收到 ${this.lastInbound.address}`);
     return { 'vrc.state': bits.join('；') + '。' };
   }
