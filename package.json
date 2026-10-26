@@ -32,7 +32,7 @@
   "author": "cortico-world-vrc contributors",
   "repository": {
     "type": "git",
-    "url": "git+https://github.com/Esmerubphire/cortico-world-vrc.git"
+    "url": "git+https://github.com/www9178/cortico-world-vrc.git"
   },
   "cortico": {
     "kind": "world",
@@ -47,5 +47,9 @@
     "test": "node --experimental-strip-types --test \"test/osc.test.mjs\"",
     "listen": "node --experimental-strip-types tools/vrc-cli.mjs listen",
     "send": "node --experimental-strip-types tools/vrc-cli.mjs send"
-  }
+  },
+  "bugs": {
+    "url": "https://github.com/www9178/cortico-world-vrc/issues"
+  },
+  "homepage": "https://github.com/www9178/cortico-world-vrc#readme"
 }

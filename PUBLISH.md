@@ -13,8 +13,8 @@ git config user.name  "你的名字"
 git config user.email "你的邮箱"
 
 # 2. 建远端仓库（网页上新建空仓库，别勾 README）
-#    假设账号 Esmerubphire，仓库名 cortico-world-vrc
-git remote add origin https://github.com/Esmerubphire/cortico-world-vrc.git
+#    假设账号 www9178，仓库名 cortico-world-vrc
+git remote add origin https://github.com/www9178/cortico-world-vrc.git
 git branch -M main
 git push -u origin main
 ```
