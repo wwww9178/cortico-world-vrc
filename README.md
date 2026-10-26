@@ -129,6 +129,28 @@ node --experimental-strip-types tools/vrc-cli.mjs send "鲸鱼娘来啦" 9000
 | 听不见她 | `voiceDevice` 名字要能匹配到设备；VRChat 麦克风要选 **虚拟麦克风 (VB-Audio Cable A)**，不是扬声器 |
 | 她自己复读自己 | TTS 播到 Cable A 的播放端，STT 就不要听 Cable A 的录音端；只 STT 你的真麦 |
 
+
+## 它比发个报文多做了一点
+
+| 做法 | 为什么 |
+|---|---|
+| **读 VRChat 日志**拿到世界名和 OSC 状态 | OSC 只传化身参数，不会告诉你「他在哪个世界」。日志里有 `Entering Room: xxx`，也有 `Could not Start OSC: Address already in use` 这种事故现场 |
+| 物理参数只当心跳 | 化身每帧推几十条 `/avatar/parameters/*`（裙摆、胸部弹簧），全记会把日志和上下文刷爆 |
+| 标点处断句 + 队列 | 144 字上限是硬限制，句子在括号/逗号中间断开会很怪 |
+| 连不上不算错 | VRChat 没开、OSC 没开，工具只回一句「offline」，不抛异常、不刷日志 |
+
+## 参考与致谢
+
+写之前看过的项目，思路互相印证：
+
+- [VRCWizard/TTS-Voice-Wizard](https://github.com/VRCWizard/TTS-Voice-Wizard) — STT→TTS→OSC→虚拟麦 的完整链路（MIT）
+- [naeruru/mimiuchi](https://github.com/naeruru/mimiuchi) — OSC 转写界面
+- [cyberkitsune/vrc-osc-scripts](https://github.com/cyberkitsune/vrc-osc-scripts) — chatbox 脚本合集，含速率限制处理
+- [vrchat-community/osc](https://github.com/vrchat-community/osc) — 官方 OSC 说明与示例
+- [AqualCross/cortico-world-tts](https://github.com/AqualCross/cortico-world-tts) — 同生态的 TTS 世界，引擎抽象可参考
+
+代码为独立实现，未复制上述项目的代码。
+
 ## 许可
 
 MIT（见 [LICENSE](./LICENSE)）。**代码开源，模型不开源**：本仓库不含任何 VRChat 化身、语音模型或游戏素材，

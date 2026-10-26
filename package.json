@@ -4,12 +4,48 @@
   "description": "Coopanion 的 VRChat 世界扩展：经官方 OSC 让桌宠在游戏里说话（chatbox 文字 + 虚拟声卡语音）",
   "type": "module",
   "main": "./src/index.ts",
-  "exports": { ".": "./src/index.ts" },
-  "files": ["src", "voice", "tools", "examples", "describe.json", "README.md", "LICENSE", "PLAN.md"],
-  "keywords": ["cortico", "coopanion", "vrchat", "osc", "chatbox", "desktop-pet", "tts"],
+  "exports": {
+    ".": "./src/index.ts"
+  },
+  "files": [
+    "src",
+    "voice",
+    "tools",
+    "examples",
+    "describe.json",
+    "README.md",
+    "LICENSE",
+    "PLAN.md",
+    "PUBLISH.md",
+    "test"
+  ],
+  "keywords": [
+    "cortico",
+    "coopanion",
+    "vrchat",
+    "osc",
+    "chatbox",
+    "desktop-pet",
+    "tts"
+  ],
   "license": "MIT",
   "author": "cortico-world-vrc contributors",
-  "repository": { "type": "git", "url": "git+https://github.com/Esmerubphire/cortico-world-vrc.git" },
-  "cortico": { "kind": "world", "api": 6, "label": "VRChat", "describe": "describe.json" },
-  "engines": { "node": ">=22" }
+  "repository": {
+    "type": "git",
+    "url": "git+https://github.com/Esmerubphire/cortico-world-vrc.git"
+  },
+  "cortico": {
+    "kind": "world",
+    "api": 6,
+    "label": "VRChat",
+    "describe": "describe.json"
+  },
+  "engines": {
+    "node": ">=22"
+  },
+  "scripts": {
+    "test": "node --experimental-strip-types --test \"test/osc.test.mjs\"",
+    "listen": "node --experimental-strip-types tools/vrc-cli.mjs listen",
+    "send": "node --experimental-strip-types tools/vrc-cli.mjs send"
+  }
 }

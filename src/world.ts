@@ -6,6 +6,7 @@ import type { Language } from 'cortico/core/language.ts';
 import type { ToolDef, World, WorldWebUiDecl } from 'cortico/core/types.ts';
 import { VRC_DEFAULTS, normalizeConfig, vrcConfigGroup, type VrcConfig } from './config.ts';
 import { decode, encode, type OscArg } from './osc.ts';
+import { VrcLogTailer } from './vrclog.ts';
 
 interface QueuedLine {
   text: string;
@@ -37,11 +38,16 @@ export class VrcWorld implements World {
 
   private sent = 0;
 
+  private lastVoiceError = '';
+
+  private logTail = new VrcLogTailer();
+
   constructor(opts: { cfg?: Record<string, unknown> } = {}) {
     this.cfg = normalizeConfig(opts.cfg ?? {});
   }
 
   async start(): Promise<void> {
+    try { this.logTail.start(); } catch {}
     try {
       this.out = createSocket({ type: 'udp4', reuseAddr: true });
       this.out.on('error', () => {});
@@ -62,6 +68,7 @@ export class VrcWorld implements World {
   }
 
   async stop(): Promise<void> {
+    try { this.logTail.stop(); } catch {}
     for (const s of [this.out, this.in]) {
       try {
         s?.close();
@@ -303,6 +310,10 @@ export class VrcWorld implements World {
 
   private describeStatus(): string {
     const lines: string[] = [];
+    const log = this.logTail.current();
+    if (log.worldName) lines.push(`所在世界：${log.worldName}`);
+    if (log.oscError) lines.push(`OSC 启动失败：${log.oscError}`);
+    else if (log.oscEnabled === false) lines.push('OSC：日志里显示未开启');
     lines.push(this.online() ? 'VRChat：在线（OSC 有动静）' : 'VRChat：offline（没收到过 OSC，游戏可能没开或没开 OSC）');
     if (this.avatarId) lines.push(`当前化身：${this.avatarId}`);
     if (this.worldId) lines.push(`当前世界：${this.worldId}`);
