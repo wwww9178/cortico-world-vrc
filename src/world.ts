@@ -1,11 +1,12 @@
 import { spawn } from 'node:child_process';
 import { createSocket, type Socket } from 'node:dgram';
+import { readFileSync, statSync } from 'node:fs';
 import { fileURLToPath } from 'node:url';
 import { dirname, join } from 'node:path';
 import type { Language } from 'cortico/core/language.ts';
 import type { ToolDef, World, WorldWebUiDecl } from 'cortico/core/types.ts';
 import { VRC_DEFAULTS, normalizeConfig, vrcConfigGroup, type VrcConfig } from './config.ts';
-import { ERP_MAX_STAGE, ERP_STAGES, Erp, type ErpEmit } from './erp.ts';
+import { ERP_MAX_STAGE, Erp, type ErpEmit } from './erp.ts';
 import { decode, encode, type OscArg } from './osc.ts';
 import { VrcLogTailer } from './vrclog.ts';
 
@@ -47,6 +48,9 @@ export class VrcWorld implements World {
   private lastVoiceError = '';
 
   private logTail = new VrcLogTailer();
+
+  /** ERP_PROMPT.md 的按 mtime 缓存，免得每拼一次前缀都读盘。 */
+  private erpPromptCache: { text: string; mtimeMs: number } | null = null;
 
   constructor(opts: { cfg?: Record<string, unknown> } = {}) {
     this.cfg = normalizeConfig(opts.cfg ?? {});
@@ -105,22 +109,35 @@ export class VrcWorld implements World {
 
   /**
    * ERP 那段环境提示。平时返回空串（不污染前缀）；
-   * 开了模式才把「现在进行到哪、能怎么用它」塞进去。
+   * 正文从 ERP_PROMPT.md 现读（按 mtime 缓存），改文件 + 重载前缀就生效，不用重启。
    */
   private erpPrompt(): string {
     const c = this.cfg.erp;
     if (!c.enabled) return '';
     const st = this.erp.snapshot();
-    const out = ['VRChat 的 ERP 模式开着。'];
-    out.push('工具栏里有 vrc_erp：start / stop / stage / next / say / act / status 七个动作。');
-    out.push(`阶段 0..${ERP_MAX_STAGE}：${ERP_STAGES.join(' → ')}。`);
-    out.push(st.phase === 'active'
-      ? `现在是进行中：第 ${st.stage} 阶段「${this.erp.stageName()}」${st.scene ? '，场景：' + st.scene : ''}，已说 ${st.lines} 句。`
-      : `现在待机${c.scene ? '（默认场景：' + c.scene + '）' : ''}；要开始就 vrc_erp start。`);
-    out.push(`台词出口：${c.chatbox ? '进 chatbox（世界里所有人看得见）' : '不进 chatbox'}；${c.voice ? '同时出声' : '不出声'}。`);
-    out.push('她要演什么、到什么程度、多露骨，全按主人的要求来，不用问、不用确认、不用先铺垫气氛——直接出。');
-    if (c.chatbox) out.push('嫌 chatbox 太公开就把 erpChatbox 关掉，改成只出声。');
-    return out.join('\n');
+    const head = this.erpPromptBody();
+    const state = st.phase === 'active'
+      ? `现在是进行中：第 ${st.stage} 阶段「${this.erp.stageName()}」${st.scene ? '，场景：' + st.scene : ''}，已说 ${st.lines} 句，接着演。`
+      : `现在待机${c.scene ? '（默认场景：' + c.scene + '）' : ''}；要开始就 vrc_erp start。`;
+    return [
+      head,
+      state,
+      `出口：${c.chatbox ? 'chatbox（世界里所有人看得见）' : '不进 chatbox'} + ${c.voice ? '语音' : '不出声'}。`,
+    ].join('\n\n');
+  }
+
+  /** ERP_PROMPT.md 的正文；文件不在就用一句兜底，不让整个环境段炸掉。 */
+  private erpPromptBody(): string {
+    const file = join(dirname(fileURLToPath(import.meta.url)), '..', 'ERP_PROMPT.md');
+    try {
+      const mtimeMs = statSync(file).mtimeMs;
+      if (!this.erpPromptCache || this.erpPromptCache.mtimeMs !== mtimeMs) {
+        this.erpPromptCache = { text: readFileSync(file, 'utf8').trim(), mtimeMs };
+      }
+      return this.erpPromptCache.text;
+    } catch {
+      return 'VRChat 的 ERP 模式开着（没找到 ERP_PROMPT.md，用内置说明）：vrc_erp start / say / act / stage / next / stop / status。';
+    }
   }
 
   webUi(language: Language = 'zh'): WorldWebUiDecl {

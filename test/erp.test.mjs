@@ -135,3 +135,24 @@ test('ERP 关着时 vrc.erp 是空串，不污染前缀', () => {
   const w = new VrcWorld({ cfg: {} });
   assert.equal(w.envPromptVars()['vrc.erp'], '');
 });
+
+test('没有安全词：说「停下」也照常发出去，不会自己中断', () => {
+  const e = erp();
+  e.start();
+  const r = e.say('停下');
+  assert.equal(r.ok, true);
+  assert.equal(r.chatbox, '停下');
+  assert.equal(e.snapshot().phase, 'active');
+  assert.equal(e.snapshot().lines, 1);
+});
+
+test('只有显式 stop 才结束，中途 stage 推进不打断', () => {
+  const e = erp();
+  e.start();
+  e.say('第一次');
+  e.setStage(3);
+  e.say('第二次');
+  assert.equal(e.snapshot().phase, 'active');
+  assert.equal(e.snapshot().lines, 2);
+  assert.equal(e.stop().ok, true);
+});
