@@ -44,9 +44,10 @@
     "node": ">=22"
   },
   "scripts": {
-    "test": "node --experimental-strip-types --test \"test/osc.test.mjs\"",
+    "test": "node --experimental-strip-types --test \"test/*.test.mjs\"",
     "listen": "node --experimental-strip-types tools/vrc-cli.mjs listen",
-    "send": "node --experimental-strip-types tools/vrc-cli.mjs send"
+    "send": "node --experimental-strip-types tools/vrc-cli.mjs send",
+    "break": "node tools/apply-break.mjs"
   },
   "bugs": {
     "url": "https://github.com/wwww9178/cortico-world-vrc/issues"

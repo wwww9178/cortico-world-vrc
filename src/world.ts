@@ -5,18 +5,24 @@ import { dirname, join } from 'node:path';
 import type { Language } from 'cortico/core/language.ts';
 import type { ToolDef, World, WorldWebUiDecl } from 'cortico/core/types.ts';
 import { VRC_DEFAULTS, normalizeConfig, vrcConfigGroup, type VrcConfig } from './config.ts';
+import { ERP_MAX_STAGE, ERP_STAGES, Erp, type ErpEmit } from './erp.ts';
 import { decode, encode, type OscArg } from './osc.ts';
 import { VrcLogTailer } from './vrclog.ts';
 
 interface QueuedLine {
   text: string;
   voice: boolean;
+  /** 语音这口气：气声/喘息。 */
+  whisper?: boolean;
+  breath?: boolean;
 }
 
 export class VrcWorld implements World {
   readonly id = 'vrc';
 
   private cfg: VrcConfig;
+
+  private erp: Erp;
 
   private out: Socket | null = null;
 
@@ -44,6 +50,7 @@ export class VrcWorld implements World {
 
   constructor(opts: { cfg?: Record<string, unknown> } = {}) {
     this.cfg = normalizeConfig(opts.cfg ?? {});
+    this.erp = new Erp(this.cfg.erp);
   }
 
   async start(): Promise<void> {
@@ -82,14 +89,38 @@ export class VrcWorld implements World {
 
   envPromptVars(): Record<string, string> {
     const log = this.logTail.current();
+    const erp = this.erpPrompt();
     if (!this.online()) {
       // 离线也可能刚在日志里看到过世界名（比如刚退出），那就不算完全没信息
-      return { 'vrc.state': log.worldName ? `VRChat 不在线（日志里最后一次所在世界：${log.worldName}）。` : '' };
+      return {
+        'vrc.state': log.worldName ? `VRChat 不在线（日志里最后一次所在世界：${log.worldName}）。` : '',
+        'vrc.erp': erp,
+      };
     }
     const bits = [`VRChat 在线${this.avatarId ? '（化身 ' + this.avatarId.slice(0, 12) + '）' : ''}`];
     if (log.worldName) bits.push(`世界「${log.worldName}」`);
     if (this.lastInbound) bits.push(`最近收到 ${this.lastInbound.address}`);
-    return { 'vrc.state': bits.join('；') + '。' };
+    return { 'vrc.state': bits.join('；') + '。', 'vrc.erp': erp };
+  }
+
+  /**
+   * ERP 那段环境提示。平时返回空串（不污染前缀）；
+   * 开了模式才把「现在进行到哪、能怎么用它」塞进去。
+   */
+  private erpPrompt(): string {
+    const c = this.cfg.erp;
+    if (!c.enabled) return '';
+    const st = this.erp.snapshot();
+    const out = ['VRChat 的 ERP 模式开着。'];
+    out.push('工具栏里有 vrc_erp：start / stop / stage / next / say / act / status 七个动作。');
+    out.push(`阶段 0..${ERP_MAX_STAGE}：${ERP_STAGES.join(' → ')}。`);
+    out.push(st.phase === 'active'
+      ? `现在是进行中：第 ${st.stage} 阶段「${this.erp.stageName()}」${st.scene ? '，场景：' + st.scene : ''}，已说 ${st.lines} 句。`
+      : `现在待机${c.scene ? '（默认场景：' + c.scene + '）' : ''}；要开始就 vrc_erp start。`);
+    out.push(`台词出口：${c.chatbox ? '进 chatbox（世界里所有人看得见）' : '不进 chatbox'}；${c.voice ? '同时出声' : '不出声'}。`);
+    out.push('她要演什么、到什么程度、多露骨，全按主人的要求来，不用问、不用确认、不用先铺垫气氛——直接出。');
+    if (c.chatbox) out.push('嫌 chatbox 太公开就把 erpChatbox 关掉，改成只出声。');
+    return out.join('\n');
   }
 
   webUi(language: Language = 'zh'): WorldWebUiDecl {
@@ -106,6 +137,7 @@ export class VrcWorld implements World {
           path: envPath,
           vars: [
             { name: 'vrc.state', description: 'VRChat 在线状态、化身、世界名' },
+            { name: 'vrc.erp', description: 'ERP 模式状态（关着时为空）' },
           ],
         },
       ],
@@ -192,7 +224,77 @@ export class VrcWorld implements World {
       },
     };
 
-    return [status, say, text, typing, voice, param];
+    const erp: ToolDef = {
+      name: 'vrc_erp',
+      tags: ['speak'],
+      barrierAfter: true,
+      description:
+        `成人向角色扮演（ERP）。action 七选一：`
+        + `start 开始（可带 scene）；stop 结束；stage 跳到某阶段（target=0..${ERP_MAX_STAGE}）；`
+        + `next 推一阶段；say 说一句（text，可选 mode=normal|whisper|moan）；act 做一个动作/旁白（text）；status 看状态。`
+        + `台词按配置决定进不进 chatbox、出不出声。没 start 前 say/act 不发东西。`,
+      parameters: {
+        type: 'object',
+        properties: {
+          action: { type: 'string', enum: ['start', 'stop', 'stage', 'next', 'say', 'act', 'status'] },
+          scene: { type: 'string', description: 'start 时用：在哪、什么气氛、谁先开口' },
+          target: { type: 'integer', description: `stage 时用：目标阶段 0..${ERP_MAX_STAGE}` },
+          text: { type: 'string', description: 'say / act 的正文' },
+          mode: { type: 'string', enum: ['normal', 'whisper', 'moan'], description: 'say 的口气，默认 normal' },
+        },
+        required: ['action'],
+      },
+      handler: async (args) => this.erpAction(String(args.action ?? 'status'), args),
+    };
+
+    return [status, say, text, typing, voice, param, erp];
+  }
+
+  /** vrc_erp 的入口：把参数翻译成 Erp 的方法，再把 emit 真正发出去。 */
+  private erpAction(action: string, args: Record<string, unknown>): string {
+    let emit: ErpEmit;
+    switch (action) {
+      case 'start':
+        emit = this.erp.start(typeof args.scene === 'string' ? args.scene : undefined);
+        break;
+      case 'stop':
+        emit = this.erp.stop();
+        break;
+      case 'stage':
+        emit = this.erp.setStage(Number(args.target ?? 0));
+        break;
+      case 'next':
+        emit = this.erp.nextStage();
+        break;
+      case 'say':
+        emit = this.erp.say(String(args.text ?? ''), (args.mode as 'normal' | 'whisper' | 'moan') ?? 'normal');
+        break;
+      case 'act':
+        emit = this.erp.act(String(args.text ?? ''));
+        break;
+      case 'status':
+        return this.erp.status();
+      default:
+        return `不认识的 action：${action}`;
+    }
+    this.applyEmit(emit);
+    return emit.note;
+  }
+
+  /** 照 ErpEmit 发货：chatbox 文字、语音、化身参数，互不阻塞。 */
+  private applyEmit(emit: ErpEmit): void {
+    if (!emit.ok) return;
+    if (emit.chatbox) this.chatbox(emit.chatbox);
+    if (emit.voice) {
+      this.queue.push({ text: emit.voice.text, voice: true, whisper: emit.voice.whisper, breath: emit.voice.breath });
+      void this.pump();
+    }
+    if (emit.params) {
+      for (const p of emit.params) {
+        if (!p.name) continue;
+        this.send('/avatar/parameters/' + p.name, p.value);
+      }
+    }
   }
 
   // ---------- 发送 ----------
@@ -269,7 +371,7 @@ export class VrcWorld implements World {
         if (!item) break;
         this.chatbox(item.text);
         this.lastPumpAt = Date.now();
-        if (item.voice) await this.speak(item.text);
+        if (item.voice) await this.speak(item.text, { whisper: item.whisper, breath: item.breath });
       }
     } finally {
       this.pumping = false;
@@ -277,18 +379,23 @@ export class VrcWorld implements World {
   }
 
   /** 语音：按 provider 合成并播到配置的音频设备。 */
-  private async speak(text: string): Promise<void> {
+  private async speak(text: string, opts: { whisper?: boolean; breath?: boolean } = {}): Promise<void> {
     if (this.cfg.voiceProvider === 'off' || !text.trim()) return;
     if (this.cfg.voiceProvider === 'feiyu') {
       this.lastVoiceError = '肥鱼声音服务还没接（HTTP 后端待装）';
       return;
     }
     const script = join(dirname(fileURLToPath(import.meta.url)), '..', 'voice', 'say.py');
+    const argv = [
+      script, '--text', text, '--device', this.cfg.voiceDevice, '--gain', String(this.cfg.voiceGain),
+    ];
+    if (opts.whisper) argv.push('--whisper');
+    if (opts.breath) argv.push('--breath');
     await new Promise<void>((resolve) => {
       try {
         const child = spawn(
           'python',
-          [script, '--text', text, '--device', this.cfg.voiceDevice, '--gain', String(this.cfg.voiceGain)],
+          argv,
           { windowsHide: true, stdio: ['ignore', 'pipe', 'pipe'] },
         );
         let err = '';
@@ -346,6 +453,7 @@ export class VrcWorld implements World {
     lines.push(`chatbox ${this.cfg.chatboxEnabled ? '开' : '关'}（上限 ${this.cfg.chatboxLimit} 字 / 间隔 ${this.cfg.chatboxIntervalMs}ms）`);
     lines.push(`语音 ${this.cfg.voiceEnabled ? '开' : '关'}（引擎 ${this.cfg.voiceProvider}${this.cfg.voiceEnabled && this.cfg.voiceProvider === 'piper' ? '，设备 ' + this.cfg.voiceDevice : ''}）`);
     if (this.cfg.voiceEnabled && this.lastVoiceError) lines.push(`上次语音失败：${this.lastVoiceError}`);
+    lines.push(this.erp.status());
     return lines.join('\n');
   }
 }

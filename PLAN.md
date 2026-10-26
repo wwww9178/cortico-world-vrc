@@ -89,6 +89,7 @@
 | M3 | 语音：文字→Piper→播到指定设备 | ✅ 链路完成（piper 合成 2.25s，播到 Cable A）；肥鱼后端待接 |
 | M4 | 参数 + 事件回读 | 回读已通（`/avatar/change` 进上下文）；参数驱动默认关闭（不夺舍你的化身） |
 | M5 | 开源：README / LICENSE / 示例 / git | 进行中：文档与 MIT 已就绪，待推 GitHub 与 npm |
+| M6 | ERP（成人向角色扮演） | ✅ 状态机 + 三路出口 + 阶段参数 + 单测；`tools/apply-break.mjs` 负责把全局前缀改动热重载 |
 
 ## 八、风险与对策
 

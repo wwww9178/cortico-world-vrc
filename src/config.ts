@@ -1,5 +1,6 @@
 import type { ConfigGroup } from 'cortico/core/types.ts';
 import type { Language } from 'cortico/core/language.ts';
+import { ERP_DEFAULTS, ERP_MAX_STAGE, ERP_STAGES, normalizeErpConfig, type ErpConfig } from './erp.ts';
 
 export interface VrcConfig {
   host: string;
@@ -18,6 +19,8 @@ export interface VrcConfig {
   voiceMix: 'solo' | 'voicemeeter';
   paramEnabled: boolean;
   activeWithinSec: number;
+  /** 成人向角色扮演。字段细节见 erp.ts。 */
+  erp: ErpConfig;
 }
 
 export const VRC_DEFAULTS: VrcConfig = {
@@ -37,10 +40,11 @@ export const VRC_DEFAULTS: VrcConfig = {
   voiceMix: 'solo',
   paramEnabled: false,
   activeWithinSec: 120,
+  erp: { ...ERP_DEFAULTS, paramMap: { ...ERP_DEFAULTS.paramMap } },
 };
 
 export function normalizeConfig(raw: Record<string, unknown>): VrcConfig {
-  const cfg: VrcConfig = { ...VRC_DEFAULTS };
+  const cfg: VrcConfig = { ...VRC_DEFAULTS, erp: { ...VRC_DEFAULTS.erp, paramMap: { ...VRC_DEFAULTS.erp.paramMap } } };
   const num = (v: unknown, lo: number, hi: number, fb: number) => {
     const n = Number(v);
     return Number.isFinite(n) ? Math.min(hi, Math.max(lo, n)) : fb;
@@ -61,6 +65,7 @@ export function normalizeConfig(raw: Record<string, unknown>): VrcConfig {
   cfg.chatboxIntervalMs = Math.round(num(raw.chatboxIntervalMs, 300, 10000, cfg.chatboxIntervalMs));
   cfg.voiceGain = num(raw.voiceGain, 0, 2, cfg.voiceGain);
   cfg.activeWithinSec = Math.round(num(raw.activeWithinSec, 10, 3600, cfg.activeWithinSec));
+  cfg.erp = normalizeErpConfig(raw);
   return cfg;
 }
 
@@ -97,6 +102,29 @@ export function vrcConfigGroup(language: Language = 'zh'): ConfigGroup {
         'worlds.vrc.voiceMix': { type: 'string', enum: ['solo', 'voicemeeter'], title: t('混音方式', 'Mix mode'), 'x-hot': true, default: 'solo' },
         'worlds.vrc.paramEnabled': { type: 'boolean', title: t('驱动化身参数（默认关闭）', 'Drive avatar params'), 'x-hot': true, default: false },
         'worlds.vrc.activeWithinSec': { type: 'integer', title: t('多久内有 OSC 动静算在线（秒）', 'Online window (s)'), minimum: 10, maximum: 3600, 'x-hot': true, default: 120 },
+        'worlds.vrc.erpEnabled': {
+          type: 'boolean', title: t('ERP 模式（成人向角色扮演）', 'ERP mode (adult roleplay)'), 'x-hot': true, default: ERP_DEFAULTS.enabled,
+          description: t('打开后 vrc_erp 才能用。台词按 erpChatbox / erpVoice 的开关出。', 'Enables the vrc_erp tool.'),
+        },
+        'worlds.vrc.erpScene': {
+          type: 'string', title: t('默认场景', 'Default scene'), 'x-hot': true, default: ERP_DEFAULTS.scene,
+          description: t('在哪、什么气氛、谁先开口。vrc_erp start 时可以临时覆盖。', 'Where it happens; can be overridden per start.'),
+        },
+        'worlds.vrc.erpPartner': { type: 'string', title: t('对方称呼', 'Partner name'), 'x-hot': true, default: ERP_DEFAULTS.partner },
+        'worlds.vrc.erpChatbox': {
+          type: 'boolean', title: t('台词进 chatbox', 'RP lines to chatbox'), 'x-hot': true, default: ERP_DEFAULTS.chatbox,
+          description: t('注意：chatbox 在世界里公开可见。人多的地方关掉它、只留语音或全静默。', 'Chatbox is public in-world.'),
+        },
+        'worlds.vrc.erpVoice': { type: 'boolean', title: t('台词同时出声', 'RP lines spoken'), 'x-hot': true, default: ERP_DEFAULTS.voice },
+        'worlds.vrc.erpStage': {
+          type: 'integer', title: t('起始阶段', 'Start stage'), minimum: 0, maximum: ERP_MAX_STAGE, 'x-hot': true, default: ERP_DEFAULTS.stage,
+          description: t(`0=${ERP_STAGES[0]} … ${ERP_MAX_STAGE}=${ERP_STAGES[ERP_MAX_STAGE]}`, '0 = warm-up'),
+        },
+        'worlds.vrc.erpParamEnabled': { type: 'boolean', title: t('阶段切化身参数', 'Stage drives avatar params'), 'x-hot': true, default: ERP_DEFAULTS.paramEnabled },
+        'worlds.vrc.erpParamMap': {
+          type: 'object', title: t('阶段 → 参数名', 'Stage → param name'), 'x-hot': true, default: ERP_DEFAULTS.paramMap,
+          description: t('例如 {"1":"NSFW1","2":"NSFW2"}；参数名要和你模型里的完全一致。', 'e.g. {"1":"NSFW1","2":"NSFW2"}'),
+        },
       },
     },
   } as ConfigGroup;

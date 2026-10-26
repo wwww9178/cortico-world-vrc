@@ -115,6 +115,52 @@
           "value"
         ]
       }
+    },
+    {
+      "name": "vrc_erp",
+      "tags": [
+        "speak"
+      ],
+      "barrierAfter": true,
+      "summary": "成人向角色扮演",
+      "description": "ERP 状态机：start 开始（可带 scene）/ stop 结束 / stage 跳阶段（target）/ next 推一阶段 / say 说一句（text，mode=normal|whisper|moan）/ act 动作旁白（text）/ status 状态。台词按配置决定进不进 chatbox、出不出声；没 start 前 say/act 不发东西。",
+      "parameters": {
+        "type": "object",
+        "properties": {
+          "action": {
+            "type": "string",
+            "enum": [
+              "start",
+              "stop",
+              "stage",
+              "next",
+              "say",
+              "act",
+              "status"
+            ]
+          },
+          "scene": {
+            "type": "string"
+          },
+          "target": {
+            "type": "integer"
+          },
+          "text": {
+            "type": "string"
+          },
+          "mode": {
+            "type": "string",
+            "enum": [
+              "normal",
+              "whisper",
+              "moan"
+            ]
+          }
+        },
+        "required": [
+          "action"
+        ]
+      }
     }
   ],
   "events": [],

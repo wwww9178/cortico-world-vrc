@@ -108,6 +108,52 @@ node ..\..\resources\app\node_modules\pnpm\bin\pnpm.cjs \
 | `vrc_voice` | 只出声 |
 | `vrc_typing` | 「正在输入」开关 |
 | `vrc_param` | 设化身参数（仅在 `paramEnabled` 打开时可用） |
+| `vrc_erp` | 成人向角色扮演（`erpEnabled` 打开时可用）：start / stop / stage / next / say / act / status |
+
+## ERP（成人向角色扮演）
+
+一句话：**它就是一段带阶段的状态机**，台词和动作由模型给，插件负责按配置往 chatbox / 语音 / 化身参数三个出口发。
+
+```text
+vrc_erp start  { scene?: "浴室，她先开口" }
+vrc_erp say    { text: "...", mode: "normal" | "whisper" | "moan" }
+vrc_erp act    { text: "把发绳解开" }     → 发 *把发绳解开*
+vrc_erp stage  { target: 2 }              → 跳到「前戏」
+vrc_erp next                              → 推一阶段
+vrc_erp stop                              → 结束，并把化身参数全部复位
+```
+
+阶段：`0 预热 → 1 调情 → 2 前戏 → 3 深入 → 4 余韵`（`erpStage` 设起始，`erpMax` 固定 4）。
+
+| 键 | 默认 | 说明 |
+|---|---|---|
+| `erpEnabled` | `false` | 总开关。关着时 `vrc_erp` 一律拒绝 |
+| `erpScene` | `""` | 默认场景；`start` 时可临时覆盖 |
+| `erpPartner` | `主人` | 这段里怎么称呼对方 |
+| `erpStage` | `0` | 起始阶段 |
+| `erpChatbox` | `true` | 台词进不进 chatbox。**chatbox 是世界广播，人多的地方关掉** |
+| `erpVoice` | `true` | 台词出不出声（走虚拟声卡那条链） |
+| `erpParamEnabled` | `false` | 阶段推进时切化身参数 |
+| `erpParamMap` | `{"1":"NSFW1","2":"NSFW2","3":"NSFW2","4":""}` | 阶段 → 要打开的 bool 参数名，按你的模型改 |
+
+两点实现细节：
+
+- **出口是可验证的**。`Erp.say()` 返回一个 `ErpEmit`，里面写清这次到底走了 `chatbox` / `voice` / `param` 哪几路；`world.ts` 照着发而已。单测断言的就是这个 emit，所以「这句有没有漏进聊天框」不靠自觉。
+- **关着 ERP 时 `{{vrc.erp}}` 是空串**，不会往系统前缀里灌废话。
+
+## 修「破甲只在一场对话里生效」
+
+Coopanion 的系统前缀是**按 session 缓存的快照**：改了 `CONSTITUTION.md` 之后，只有被手动「重载系统前缀」的那一场会换新，其他入口还在用旧快照 —— 看起来就是「只有一场对话放开了，别的没有」。
+
+`tools/apply-break.mjs` 把这件事做掉：
+
+```bash
+node tools/apply-break.mjs            # 写入带标记的 ERP 块 + POST 热重载，立刻生效
+node tools/apply-break.mjs --dry-run  # 只看要改什么
+node tools/apply-break.mjs --revert   # 撤掉标记块
+```
+
+块写在 `data/home/companion/workspace/CONSTITUTION.md`，用 `<!-- LSKILL:ERP:BEGIN -->` 包住，可重复执行、可回滚；写完后调 `POST /api/session/reload-prefix`，不用重启。
 
 ## 调试
 

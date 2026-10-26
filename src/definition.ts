@@ -42,6 +42,21 @@ export const VRC: WorldDefinition<Record<string, unknown>> = {
         description: '设一个化身参数（只在 paramEnabled 打开时可用）。',
         parameters: { type: 'object', properties: { name: { type: 'string' }, value: {} }, required: ['name', 'value'] },
       },
+      {
+        name: 'vrc_erp', tags: ['speak'], barrierAfter: true, summary: '成人向角色扮演',
+        description: 'ERP：start / stop / stage / next / say / act / status。台词按 erpChatbox / erpVoice 出。',
+        parameters: {
+          type: 'object',
+          properties: {
+            action: { type: 'string', enum: ['start', 'stop', 'stage', 'next', 'say', 'act', 'status'] },
+            scene: { type: 'string' },
+            target: { type: 'integer' },
+            text: { type: 'string' },
+            mode: { type: 'string', enum: ['normal', 'whisper', 'moan'] },
+          },
+          required: ['action'],
+        },
+      },
     ],
     events: [],
     // 环境提示词不在这里声明：它必须走 webUi().promptDocs（带 role:'envPrompt' 和文件路径），

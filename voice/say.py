@@ -76,6 +76,9 @@ def main() -> int:
     ap.add_argument("--model", default=str(DEFAULT_MODEL))
     ap.add_argument("--length-scale", type=float, default=1.05)
     ap.add_argument("--gain", type=float, default=1.0)
+    ap.add_argument("--whisper", action="store_true", help="气声：降增益、拖慢语速")
+    ap.add_argument("--breath", action="store_true", help="句首加一段喘息停顿")
+    ap.add_argument("--breath-ms", type=int, default=280)
     ap.add_argument("--list-devices", action="store_true")
     ap.add_argument("--wav-out", help="只合成不播，把 wav 写到这个路径")
     args = ap.parse_args()
@@ -87,7 +90,19 @@ def main() -> int:
         print("没有 --text", file=sys.stderr)
         return 2
 
-    pcm, rate = synth_piper(args.text, Path(args.model), args.length_scale)
+    length_scale = args.length_scale
+    gain = args.gain
+    if args.whisper:
+        # 气声：更慢、更轻，像贴着耳朵说
+        length_scale *= 1.22
+        gain *= 0.55
+
+    pcm, rate = synth_piper(args.text, Path(args.model), length_scale)
+
+    if args.breath:
+        # 句首空一段，听感上像先喘一口气再开口
+        pad = int(rate * args.breath_ms / 1000)
+        pcm = b"\x00\x00" * pad + pcm
 
     if args.wav_out:
         with wave.open(args.wav_out, "wb") as w:
@@ -99,7 +114,7 @@ def main() -> int:
         return 0
 
     device = pick_device(args.device)
-    play(pcm, rate, device, args.gain)
+    play(pcm, rate, device, gain)
     print(f"已播放 {len(pcm)/2/rate:.2f}s → 设备 #{device}")
     return 0
 

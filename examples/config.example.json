@@ -17,7 +17,20 @@
       "voiceGain": 1,
       "voiceMix": "solo",
       "paramEnabled": false,
-      "activeWithinSec": 120
+      "activeWithinSec": 120,
+      "erpEnabled": false,
+      "erpScene": "",
+      "erpPartner": "主人",
+      "erpStage": 0,
+      "erpChatbox": true,
+      "erpVoice": true,
+      "erpParamEnabled": false,
+      "erpParamMap": {
+        "1": "NSFW1",
+        "2": "NSFW2",
+        "3": "NSFW2",
+        "4": ""
+      }
     }
   }
 }

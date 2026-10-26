@@ -17,8 +17,8 @@ jobs:
       - uses: actions/setup-node@v4
         with:
           node-version: ${{ matrix.node }}
-      - name: 单元测试（OSC 编解码）
-        run: node --experimental-strip-types --test "test/osc.test.mjs"
+      - name: 单元测试（OSC 编解码 + ERP 状态机）
+        run: node --experimental-strip-types --test "test/*.test.mjs"
       - name: 类型与语法检查
         run: node --experimental-strip-types --check src/index.ts || true
 
