@@ -44,18 +44,9 @@ export const VRC: WorldDefinition<Record<string, unknown>> = {
       },
     ],
     events: [],
-    prompts: [
-      {
-        key: 'worlds.vrc.envPrompt',
-        title: 'VRChat · 环境提示词',
-        role: 'envPrompt',
-        content: [
-          '{{vrc.state}}',
-          '（这是 VRChat 的在线状态。要在里面说话用 vrc_say；只出字用 vrc_text；出声用 vrc_voice。'
-            + '没在线就别硬发，chatbox 那边看不见。）',
-        ].join('\n'),
-      },
-    ],
+    // 环境提示词不在这里声明：它必须走 webUi().promptDocs（带 role:'envPrompt' 和文件路径），
+    // 写在这个数组里会被静默忽略，渲染出来是空字符串。
+    prompts: [],
   },
   create: (ctx) => new VrcWorld({ cfg: (ctx as { cfg?: Record<string, unknown> }).cfg }),
 };

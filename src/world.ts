@@ -93,7 +93,23 @@ export class VrcWorld implements World {
   }
 
   webUi(language: Language = 'zh'): WorldWebUiDecl {
-    return { label: language === 'zh' ? 'VRChat' : 'VRChat', config: [vrcConfigGroup(language)] };
+    // 环境提示词必须走 promptDocs 声明（describe.prompts 那种写法会被忽略，渲染出来是空）
+    const envPath = join(dirname(fileURLToPath(import.meta.url)), '..', 'ENV_PROMPT.md');
+    return {
+      label: language === 'zh' ? 'VRChat' : 'VRChat',
+      config: [vrcConfigGroup(language)],
+      promptDocs: [
+        {
+          key: 'worlds.vrc.envPrompt',
+          title: language === 'zh' ? 'VRChat · 环境提示词' : 'VRChat · env prompt',
+          role: 'envPrompt',
+          path: envPath,
+          vars: [
+            { name: 'vrc.state', description: 'VRChat 在线状态、化身、世界名' },
+          ],
+        },
+      ],
+    } as WorldWebUiDecl;
   }
 
   tools(): ToolDef[] {
