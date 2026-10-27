@@ -3,7 +3,8 @@
 让 **Coopanion 桌宠**在 **VRChat** 里说话：文字进游戏聊天框（chatbox），声音经虚拟声卡进游戏麦克风。
 走 VRChat **官方 OSC 接口**，不注入客户端、不改游戏文件。
 
-> 状态：M1–M3 已实测通过（chatbox 真的出现在游戏画面里、语音真的播进 VB-Audio Cable A）；M4/M5 见 [PLAN.md](./PLAN.md)。
+> 状态：v0.3.0。chatbox / 语音 / 事件回读 / ERP 都在真机上跑过（chatbox 真的出现在游戏画面里、语音真的播进 VB-Audio Cable A）；
+> OSCQuery、房间开放度、常驻语音 worker 是 0.3.0 新增，单测覆盖，真机待验。里程碑见 [PLAN.md](./PLAN.md)，变更见 [CHANGELOG.md](./CHANGELOG.md)。
 
 ---
 
@@ -15,6 +16,7 @@
 | 说话有声 | 文字 → TTS → 播到指定音频设备（如 VB-Audio Cable A）→ VRChat 麦克风选中它 → 别人真能听见 |
 | 听得见 | VRChat 往 `/avatar/change`、`/world/change` 等发事件 → 变成她的上下文 |
 | 有表情（可选，默认关） | `/avatar/parameters/*` 驱动**你自己的**化身。默认关闭，因为这会「夺舍」你的化身 |
+| 角色扮演（可选，默认关） | `vrc_erp`：阶段机 + 三路出口（chatbox / 语音 / 化身参数），见 [ERP 一节](#erp成人向角色扮演) |
 
 ## 不做什么
 
@@ -57,7 +59,7 @@ VRChat 麦克风 ──选择──▶ 虚拟麦克风 (VB-Audio Cable A)
 |---|---|
 | `off` | 不出声（默认） |
 | `piper` | 本机 [Piper](https://github.com/rhasspy/piper)，需 `pip install piper-tts sounddevice numpy` 和一个中文 `.onnx` 音色 |
-| `feiyu` | 肥鱼声音服务（HTTP，声线更自然）。**代码位已留，尚未接入实现** |
+| `feiyu` | 肥鱼声音服务（HTTP，声线更自然）。POST `{text,style}` → 回 `audio/wav`，见下面「语音」一节 |
 
 `piper` 需要改 `voice/say.py` 里的 `DEFAULT_MODEL` 指向你的音色文件，或在配置里不管、直接改脚本。
 可以先只验合成：
@@ -94,7 +96,8 @@ node ..\..\resources\app\node_modules\pnpm\bin\pnpm.cjs \
 | `voiceProvider` | `off` | `off` / `piper` / `feiyu` |
 | `voiceDevice` | `虚拟扬声器 (VB-Audio Cable A)` | 音频设备名里的一段 |
 | `voiceGain` | `1` | 音量倍率 |
-| `voiceMix` | `solo` | `solo` 只有她；`voicemeeter` 预留 |
+| `voiceMix` | `solo` | `solo` 只有她（Cable A）；`voicemeeter` 播到 `voicemeeterDevice`，和真麦混一路 |
+| `voiceStyle` | `cute` | 肥鱼的声线名 |
 | `paramEnabled` | `false` | 是否允许驱动你自己的化身参数 |
 | `activeWithinSec` | `120` | 多久没有 OSC 就算离线 |
 | `oscQuery` | `true` | 启动时问 OSCQuery 要真实端口，问不到才用 `outPort` |
@@ -128,7 +131,7 @@ vrc_erp next                              → 推一阶段
 vrc_erp stop                              → 结束，并把化身参数全部复位
 ```
 
-阶段：`0 预热 → 1 调情 → 2 前戏 → 3 深入 → 4 余韵`（`erpStage` 设起始，`erpMax` 固定 4）。
+阶段：`0 预热 → 1 调情 → 2 前戏 → 3 深入 → 4 余韵`（`erpStage` 设起始；上限固定 4 阶，没有 `erpMax` 这个键）。
 
 | 键 | 默认 | 说明 |
 |---|---|---|
@@ -250,6 +253,30 @@ node --experimental-strip-types tools/vrc-cli.mjs send "鲸鱼娘来啦" 9000
 - [AqualCross/cortico-world-tts](https://github.com/AqualCross/cortico-world-tts) — 同生态的 TTS 世界，引擎抽象可参考
 
 代码为独立实现，未复制上述项目的代码。
+
+## 开发与自检（不接 Coopanion 也能跑）
+
+```bash
+npm test                                   # 42 例：OSC / ERP 状态机 / World 出口 / 日志 / OSCQuery
+npm pack --dry-run                         # 看会打包什么；ENV_PROMPT.md 和 examples/ 必须在里面
+
+node --experimental-strip-types tools/vrc-cli.mjs listen    # 只看 VRChat 推过来的事件
+node --experimental-strip-types tools/vrc-cli.mjs send "hi" # 直接发一条到 chatbox
+
+python voice/say.py --list-devices                          # 设备名（voiceDevice 要能匹配）
+python voice/say.py --serve                                 # 手动喂 JSON 行，验常驻 worker
+```
+
+目录：
+
+```text
+src/erp.ts        ERP 状态机（纯逻辑，出口用 ErpEmit 描述）
+src/voice.ts      常驻 TTS worker + 肥鱼 HTTP 后端
+src/oscquery.ts   OSCQuery 端口发现
+src/vrclog.ts     读 VRChat 日志（世界名 / OSC 状态 / 房间开放度）
+src/osc.ts        极简 OSC 编解码
+src/world.ts      World 实现：工具、队列、出口
+```
 
 ## 许可
 
