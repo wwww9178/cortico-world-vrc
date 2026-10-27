@@ -10,12 +10,35 @@ import { homedir } from 'node:os';
  * `Could not Start OSC: Address already in use`。成熟项目（如 VRCT）都这么干。
  */
 
+/** 房间的开放程度。`private(...)` 是邀请制，`hidden` 是 friends+。 */
+export type RoomAccess = 'public' | 'friends+' | 'friends' | 'invite' | 'group' | 'unknown';
+
 export interface VrcLogState {
   worldName: string;
+  /** 从 `Joining wrld_xxx:12345~private(usr_...)` 这行解析出来的访问级别。 */
+  access: RoomAccess;
+  /** 世界 id（wrld_ 开头），拿去做白名单用。 */
+  worldId: string;
   oscEnabled: boolean | null;
   oscError: string;
   updatedAt: number;
   logPath: string;
+}
+
+/**
+ * 从 `Joining wrld_...:12345~private(usr_xxx)~region(us)` 里读访问级别。
+ * 没有访问标签的就是公开世界。
+ */
+export function parseRoomAccess(line: string): { access: RoomAccess; worldId: string } | null {
+  const m = line.match(/Joining\s+(wrld_[0-9a-fA-F-]+):(\S+)/);
+  if (!m) return null;
+  const worldId = m[1];
+  const tail = m[2];
+  if (/~groupPublic\(/i.test(tail) || /~group\(/i.test(tail)) return { access: 'group', worldId };
+  if (/~hidden\(/i.test(tail)) return { access: 'friends+', worldId };
+  if (/~friends\(/i.test(tail)) return { access: 'friends', worldId };
+  if (/~private\(/i.test(tail)) return { access: 'invite', worldId };
+  return { access: 'public', worldId };
 }
 
 function logDir(): string {
@@ -39,7 +62,9 @@ export function latestLogFile(): string | null {
 }
 
 export class VrcLogTailer {
-  private state: VrcLogState = { worldName: '', oscEnabled: null, oscError: '', updatedAt: 0, logPath: '' };
+  private state: VrcLogState = {
+    worldName: '', access: 'unknown', worldId: '', oscEnabled: null, oscError: '', updatedAt: 0, logPath: '',
+  };
 
   private offset = 0;
 
@@ -99,6 +124,13 @@ export class VrcLogTailer {
 
   private consume(line: string): void {
     if (!line) return;
+    const joined = parseRoomAccess(line);
+    if (joined) {
+      this.state.access = joined.access;
+      this.state.worldId = joined.worldId;
+      this.state.updatedAt = Date.now();
+      // 不 return：同一行后面可能还有别的信息，交给下面的分支再看一眼
+    }
     const room = line.match(/Entering Room:\s*(.+?)\s*$/);
     if (room) {
       this.state.worldName = room[1];

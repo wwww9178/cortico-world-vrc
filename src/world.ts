@@ -6,8 +6,10 @@ import { dirname, join } from 'node:path';
 import type { Language } from 'cortico/core/language.ts';
 import type { ToolDef, World, WorldWebUiDecl } from 'cortico/core/types.ts';
 import { VRC_DEFAULTS, normalizeConfig, vrcConfigGroup, type VrcConfig } from './config.ts';
-import { ERP_MAX_STAGE, Erp, type ErpEmit } from './erp.ts';
+import { ERP_MAX_STAGE, Erp, FileErpStore, type ErpEmit } from './erp.ts';
+import { discoverOscQuery } from './oscquery.ts';
 import { decode, encode, type OscArg } from './osc.ts';
+import { cleanupTempDir, synthFeiyu, VoiceWorker } from './voice.ts';
 import { VrcLogTailer } from './vrclog.ts';
 
 interface QueuedLine {
@@ -58,17 +60,39 @@ export class VrcWorld implements World {
 
   private logTail = new VrcLogTailer();
 
+  /** OSCQuery 发现到的发送端口；null = 用配置里的。 */
+  private outPortOverride: number | null = null;
+
+  /** 语音常驻 worker；voiceWorker 关掉时为 null，退回一次性 spawn。 */
+  private voiceWorker: VoiceWorker | null = null;
+
+  /** ERP 空闲自动收尾的定时器。 */
+  private erpTimer: NodeJS.Timeout | null = null;
+
   /** ERP_PROMPT.md 的按 mtime 缓存，免得每拼一次前缀都读盘。 */
-  private erpPromptCache: { text: string; mtimeMs: number } | null = null;
+  private erpPromptCache: { text: string; mtimeMs: number; file: string } | null = null;
 
   constructor(opts: { cfg?: Record<string, unknown>; transport?: VrcTransport } = {}) {
     this.cfg = normalizeConfig(opts.cfg ?? {});
-    this.erp = new Erp(this.cfg.erp);
     this.transport = opts.transport ?? null;
+    const store = this.cfg.erpStateFile ? new FileErpStore(this.cfg.erpStateFile) : undefined;
+    this.erp = new Erp(this.cfg.erp, { store });
+    if (this.cfg.voiceWorker) {
+      this.voiceWorker = new VoiceWorker({
+        script: join(dirname(fileURLToPath(import.meta.url)), '..', 'voice', 'say.py'),
+        onError: (m) => { this.lastVoiceError = m; },
+      });
+    }
+    this.scheduleErpTimer();
   }
 
   async start(): Promise<void> {
     try { this.logTail.start(); } catch {}
+    // OSCQuery：先问一句 VRChat 自己监听哪个端口，问不到就用配置里的
+    if (this.cfg.oscQuery) {
+      const found = await discoverOscQuery(this.cfg.host, this.cfg.oscQueryPort);
+      this.outPortOverride = found ? found.outPort : null;
+    }
     try {
       this.out = createSocket({ type: 'udp4', reuseAddr: true });
       this.out.on('error', () => {});
@@ -90,6 +114,9 @@ export class VrcWorld implements World {
 
   async stop(): Promise<void> {
     try { this.logTail.stop(); } catch {}
+    this.clearErpTimer();
+    try { this.voiceWorker?.stop(); } catch {}
+    this.voiceWorker = null;
     for (const s of [this.out, this.in]) {
       try {
         s?.close();
@@ -136,18 +163,32 @@ export class VrcWorld implements World {
     ].join('\n\n');
   }
 
-  /** ERP_PROMPT.md 的正文；文件不在就用一句兜底，不让整个环境段炸掉。 */
+  /**
+   * ERP 演出规则的正文，按优先级找：
+   *   1. worlds.vrc.erpPromptFile（部署方自己放的那份）
+   *   2. 包内 ERP_PROMPT.md（本地开发时用）
+   *   3. examples/ERP_PROMPT.template.md（仓库里只留模板）
+   * 找不到就用一句兜底，不让整个环境段炸掉。
+   */
   private erpPromptBody(): string {
-    const file = join(dirname(fileURLToPath(import.meta.url)), '..', 'ERP_PROMPT.md');
-    try {
-      const mtimeMs = statSync(file).mtimeMs;
-      if (!this.erpPromptCache || this.erpPromptCache.mtimeMs !== mtimeMs) {
-        this.erpPromptCache = { text: readFileSync(file, 'utf8').trim(), mtimeMs };
+    const root = join(dirname(fileURLToPath(import.meta.url)), '..');
+    const candidates = [
+      this.cfg.erpPromptFile,
+      join(root, 'ERP_PROMPT.md'),
+      join(root, 'examples', 'ERP_PROMPT.template.md'),
+    ].filter(Boolean);
+    for (const file of candidates) {
+      try {
+        const mtimeMs = statSync(file).mtimeMs;
+        if (!this.erpPromptCache || this.erpPromptCache.file !== file || this.erpPromptCache.mtimeMs !== mtimeMs) {
+          this.erpPromptCache = { text: readFileSync(file, 'utf8').trim(), mtimeMs, file };
+        }
+        return this.erpPromptCache.text;
+      } catch {
+        // 换下一个候选
       }
-      return this.erpPromptCache.text;
-    } catch {
-      return 'VRChat 的 ERP 模式开着（没找到 ERP_PROMPT.md，用内置说明）：vrc_erp start / say / act / stage / next / stop / status。';
     }
+    return 'VRChat 的 ERP 模式开着（没找到规则文件）：vrc_erp start / say / act / stage / next / stop / status。';
   }
 
   webUi(language: Language = 'zh'): WorldWebUiDecl {
@@ -277,13 +318,45 @@ export class VrcWorld implements World {
     return [status, say, text, typing, voice, param, erp];
   }
 
+  /** 房间是不是公开的（从 VRChat 日志的 Joining 行读）。 */
+  private roomAccess(): string {
+    return this.logTail.current().access;
+  }
+
+  /** 每动一次就重排一次空闲计时；到点自己收尾。 */
+  private scheduleErpTimer(): void {
+    this.clearErpTimer();
+    const ms = this.erp.timeoutInMs();
+    if (ms === null) return;
+    this.erpTimer = setTimeout(() => {
+      this.erpTimer = null;
+      const emit = this.erp.expireIfIdle();
+      if (emit) this.applyEmit(emit);
+      this.scheduleErpTimer();
+    }, Math.max(1000, ms + 50));
+    // 定时器不该把进程吊着
+    this.erpTimer.unref?.();
+  }
+
+  private clearErpTimer(): void {
+    if (!this.erpTimer) return;
+    clearTimeout(this.erpTimer);
+    this.erpTimer = null;
+  }
+
   /** vrc_erp 的入口：把参数翻译成 Erp 的方法，再把 emit 真正发出去。 */
   private erpAction(action: string, args: Record<string, unknown>): string {
     let emit: ErpEmit;
     switch (action) {
-      case 'start':
+      case 'start': {
+        const access = this.roomAccess();
+        if (this.cfg.erpRequirePrivate && access === 'public') {
+          return '当前世界是公开的（日志里 Joining 行没有访问限制），按 erpRequirePrivate 不在公开场合开 ERP。'
+            + '换个私人世界，或者把 worlds.vrc.erpRequirePrivate 关掉。';
+        }
         emit = this.erp.start(typeof args.scene === 'string' ? args.scene : undefined);
         break;
+      }
       case 'stop':
         emit = this.erp.stop();
         break;
@@ -305,6 +378,7 @@ export class VrcWorld implements World {
         return `不认识的 action：${action}`;
     }
     this.applyEmit(emit);
+    this.scheduleErpTimer();
     return emit.note;
   }
 
@@ -349,7 +423,7 @@ export class VrcWorld implements World {
     if (!this.out) return;
     try {
       const buf = encode(address, ...args);
-      this.out.send(buf, this.cfg.outPort, this.cfg.host, () => {});
+      this.out.send(buf, this.outPortOverride ?? this.cfg.outPort, this.cfg.host, () => {});
       this.sent += 1;
     } catch {
       // 发不出去就算了，状态里能看到
@@ -435,26 +509,43 @@ export class VrcWorld implements World {
     }
   }
 
+  /** 播到哪个设备：solo → Cable A；voicemeeter → VoiceMeeter 的输入。 */
+  private voiceDeviceFor(): string {
+    return this.cfg.voiceMix === 'voicemeeter' ? this.cfg.voicemeeterDevice : this.cfg.voiceDevice;
+  }
+
   /** 语音：按 provider 合成并播到配置的音频设备。 */
   private async speak(text: string, opts: { whisper?: boolean; breath?: boolean } = {}): Promise<void> {
-    if (this.cfg.voiceProvider === 'off' || !text.trim()) return;
+    const clean = text.trim();
+    if (!clean || this.cfg.voiceProvider === 'off') return;
+    const device = this.voiceDeviceFor();
     if (this.cfg.voiceProvider === 'feiyu') {
-      this.lastVoiceError = '肥鱼声音服务还没接（HTTP 后端待装）';
+      await this.speakFeiyu(clean, device);
       return;
     }
+    if (this.voiceWorker) {
+      const r = await this.voiceWorker.speak({
+        text: clean,
+        device,
+        gain: this.cfg.voiceGain,
+        whisper: opts.whisper,
+        breath: opts.breath,
+      });
+      this.lastVoiceError = r.ok ? '' : (r.error ?? '未知错误');
+      return;
+    }
+    await this.speakOneShot(clean, opts, device);
+  }
+
+  /** 常驻 worker 不可用时的退路：起一个 python 跑一句。 */
+  private async speakOneShot(text: string, opts: { whisper?: boolean; breath?: boolean }, device: string): Promise<void> {
     const script = join(dirname(fileURLToPath(import.meta.url)), '..', 'voice', 'say.py');
-    const argv = [
-      script, '--text', text, '--device', this.cfg.voiceDevice, '--gain', String(this.cfg.voiceGain),
-    ];
+    const argv = [script, '--text', text, '--device', device, '--gain', String(this.cfg.voiceGain)];
     if (opts.whisper) argv.push('--whisper');
     if (opts.breath) argv.push('--breath');
     await new Promise<void>((resolve) => {
       try {
-        const child = spawn(
-          'python',
-          argv,
-          { windowsHide: true, stdio: ['ignore', 'pipe', 'pipe'] },
-        );
+        const child = spawn('python', argv, { windowsHide: true, stdio: ['ignore', 'pipe', 'pipe'] });
         let err = '';
         child.stdout?.on('data', () => {});
         child.stderr?.on('data', (c) => { err += c.toString(); });
@@ -468,6 +559,34 @@ export class VrcWorld implements World {
         resolve();
       }
     });
+  }
+
+  /** 肥鱼：POST 文本 → 拿 wav → 交给 say.py 播。 */
+  private async speakFeiyu(text: string, device: string): Promise<void> {
+    const got = await synthFeiyu(text, { url: this.cfg.feiyuUrl, style: this.cfg.voiceStyle });
+    if (!got.wavPath) {
+      this.lastVoiceError = `肥鱼后端没接上：${got.error ?? '未知错误'}`;
+      return;
+    }
+    try {
+      await new Promise<void>((resolve) => {
+        const script = join(dirname(fileURLToPath(import.meta.url)), '..', 'voice', 'say.py');
+        const child = spawn(
+          'python',
+          [script, '--play-wav', got.wavPath!, '--device', device, '--gain', String(this.cfg.voiceGain)],
+          { windowsHide: true, stdio: ['ignore', 'pipe', 'pipe'] },
+        );
+        let err = '';
+        child.stderr?.on('data', (c) => { err += c.toString(); });
+        child.on('error', (e) => { this.lastVoiceError = e.message; resolve(); });
+        child.on('close', (code) => {
+          this.lastVoiceError = code === 0 ? '' : (err.slice(-200) || `退出码 ${code}`);
+          resolve();
+        });
+      });
+    } finally {
+      cleanupTempDir(got.dir);
+    }
   }
 
   // ---------- 接收 ----------
@@ -506,9 +625,14 @@ export class VrcWorld implements World {
       const sec = Math.round((Date.now() - this.lastInboundAt) / 1000);
       lines.push(`最近一条：${this.lastInbound.address} = ${this.lastInbound.value.slice(0, 40)}（${sec}s 前）`);
     }
-    lines.push(`发送：${this.cfg.host}:${this.cfg.outPort} ｜ 已发 ${this.sent} 条 ｜ 队列 ${this.queue.length}`);
+    const port = this.outPortOverride ?? this.cfg.outPort;
+    const portNote = this.outPortOverride ? `（OSCQuery 发现，配置写的是 ${this.cfg.outPort}）` : '';
+    lines.push(`发送：${this.cfg.host}:${port}${portNote} ｜ 已发 ${this.sent} 条 ｜ 队列 ${this.queue.length}`);
+    const access = this.roomAccess();
+    if (access !== 'unknown') lines.push(`房间开放度：${access}${access === 'public' ? '（chatbox 全大厅可见）' : ''}`);
+    if (this.cfg.voiceMix === 'voicemeeter') lines.push(`混音：VoiceMeeter（播到 ${this.cfg.voicemeeterDevice}）`);
     lines.push(`chatbox ${this.cfg.chatboxEnabled ? '开' : '关'}（上限 ${this.cfg.chatboxLimit} 字 / 间隔 ${this.cfg.chatboxIntervalMs}ms）`);
-    lines.push(`语音 ${this.cfg.voiceEnabled ? '开' : '关'}（引擎 ${this.cfg.voiceProvider}${this.cfg.voiceEnabled && this.cfg.voiceProvider === 'piper' ? '，设备 ' + this.cfg.voiceDevice : ''}）`);
+    lines.push(`语音 ${this.cfg.voiceEnabled ? '开' : '关'}（引擎 ${this.cfg.voiceProvider}${this.cfg.voiceEnabled && this.cfg.voiceProvider !== 'off' ? '，设备 ' + this.voiceDeviceFor() : ''}${this.voiceWorker ? '，常驻 worker' : ''}）`);
     if (this.cfg.voiceEnabled && this.lastVoiceError) lines.push(`上次语音失败：${this.lastVoiceError}`);
     lines.push(this.erp.status());
     return lines.join('\n');

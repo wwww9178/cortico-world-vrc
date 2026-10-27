@@ -2,3 +2,7 @@ node_modules/
 *.log
 .DS_Store
 voice/*.wav
+# 实际使用的 ERP 规则（仓库只留 examples/ERP_PROMPT.template.md）
+ERP_PROMPT.md
+__pycache__/
+*.pyc

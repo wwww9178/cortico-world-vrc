@@ -1,5 +1,26 @@
 # 变更记录
 
+## 0.3.0 — 2026-10-27
+
+### 新增
+- **语音常驻 worker**（`say.py --serve`）：Piper 模型只加载一次，首句 1~3 秒、之后每句 200~400ms。
+  进程崩了自动重开，`voiceWorker: false` 可退回一次性 spawn。
+- **肥鱼 HTTP TTS**：`voiceProvider: feiyu` 真的能用了。POST `{text, style}` → `audio/wav` → `say.py --play-wav`。
+- **OSCQuery 自动发现**：启动时读 `?HOST_INFO` 的 `OSC_PORT`，读不到回退配置；失败不影响启动。
+- **房间开放度**：从日志 `Joining wrld_...~private(...)` 解析 public / friends / friends+ / invite / group；
+  `erpRequirePrivate: true` 时公开房间拒绝开 ERP。
+- **ERP 状态落盘**（`erpStateFile`）：重启后接着演；落盘时已超时的自动算 idle。
+- **ERP 空闲收尾**（`erpIdleTimeoutSec`，默认 900s）：到点自己结束并关掉化身参数。
+- **`voiceMix: voicemeeter`**：把她的声音播到 VoiceMeeter 输入，和真麦混一路。
+- `erpPromptFile`：演出规则外置到任意路径，优先于包内文件。
+
+### 变更
+- `ERP_PROMPT.md` 移出仓库（gitignore），仓库只留 `examples/ERP_PROMPT.template.md`；
+  运行时按 `erpPromptFile` → 包内 → 模板 的顺序找。
+
+### 测试
+- 12 例新增：日志解析 4、OSCQuery 2、配置归一化 2、提示词文件 1、混音 1、状态落盘 2、空闲收尾 2。总计 42 例。
+
 ## 0.2.0 — 2026-10-27
 
 ### 新增

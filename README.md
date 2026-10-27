@@ -97,6 +97,11 @@ node ..\..\resources\app\node_modules\pnpm\bin\pnpm.cjs \
 | `voiceMix` | `solo` | `solo` 只有她；`voicemeeter` 预留 |
 | `paramEnabled` | `false` | 是否允许驱动你自己的化身参数 |
 | `activeWithinSec` | `120` | 多久没有 OSC 就算离线 |
+| `oscQuery` | `true` | 启动时问 OSCQuery 要真实端口，问不到才用 `outPort` |
+| `oscQueryPort` | `9001` | OSCQuery 的 HTTP 口（VRChat 默认） |
+| `voiceWorker` | `true` | 语音走常驻 python worker（见下） |
+| `feiyuUrl` | `http://127.0.0.1:9880/tts` | 肥鱼后端地址（`voiceProvider=feiyu` 时用） |
+| `voicemeeterDevice` | `VoiceMeeter Input` | `voiceMix=voicemeeter` 时播到哪个设备 |
 
 ## 给她的工具
 
@@ -135,6 +140,10 @@ vrc_erp stop                              → 结束，并把化身参数全部�
 | `erpVoice` | `true` | 台词出不出声（走虚拟声卡那条链） |
 | `erpParamEnabled` | `false` | 阶段推进时切化身参数 |
 | `erpParamMap` | `{"1":"NSFW1","2":"NSFW2","3":"NSFW2","4":""}` | 阶段 → 要打开的 bool 参数名，按你的模型改 |
+| `erpIdleTimeoutSec` | `900` | 多久没动静自动收尾（0 = 不自动） |
+| `erpRequirePrivate` | `false` | 公开世界里拒绝开 ERP（读日志里的 Joining 行判定） |
+| `erpPromptFile` | `""` | 演出规则文件；空 = 用包内 / `examples/ERP_PROMPT.template.md` |
+| `erpStateFile` | `""` | 状态落盘路径；空 = 只存内存 |
 
 两点实现细节：
 
@@ -153,7 +162,49 @@ node tools/apply-break.mjs --dry-run  # 只看要改什么
 node tools/apply-break.mjs --revert   # 撤掉标记块
 ```
 
+`ERP_PROMPT.md` 本身**不在仓库里**（已 gitignore），仓库只留 `examples/ERP_PROMPT.template.md`；
+插件按 `erpPromptFile` → 包内 `ERP_PROMPT.md` → 模板 的顺序找。
+
 块写在 `data/home/companion/workspace/CONSTITUTION.md`，用 `<!-- LSKILL:ERP:BEGIN -->` 包住，可重复执行、可回滚；写完后调 `POST /api/session/reload-prefix`，不用重启。
+
+## 语音：常驻 worker 与肥鱼
+
+`say.py` 有两种模式：
+
+- **一次性**（原来那样）：每句 spawn 一个 python，重载 onnx，1~3 秒。
+- **常驻 worker**（`voiceWorker: true`，默认）：`say.py --serve`，从 stdin 读 JSON 行。模型只加载一次，
+  第一句 1~3 秒，之后每句 **200~400ms**。进程崩了下次请求自动重开。
+
+协议（自己接别的 TTS 也照这个写）：
+
+```text
+→ {"text":"...", "device":"Cable A", "gain":1.0, "whisper":false, "breath":false}
+← {"ok":true, "seconds":1.24}
+← {"ok":false, "error":"..."}
+```
+
+**肥鱼后端**（`voiceProvider: feiyu`）：插件 POST `{text, style}` 到 `feiyuUrl`，要求返回
+`audio/wav`（16bit 单声道），拿到后交 `say.py --play-wav` 播。返回非 wav 会在 `vrc_status` 里如实报错。
+
+## 房间开放度
+
+`vrclog.ts` 会从日志里的 `Joining wrld_xxx:12345~private(usr_...)~region(us)` 这行读房间级别：
+
+| 日志里的标签 | 判定 |
+|---|---|
+| 没有访问标签 | `public` |
+| `~friends(...)` | `friends` |
+| `~hidden(...)` | `friends+` |
+| `~private(...)` | `invite`（邀请制） |
+| `~group(...)` / `~groupPublic(...)` | `group` |
+
+`vrc_status` 会显示它；`erpRequirePrivate: true` 时，`public` 房间直接拒绝 `vrc_erp start`。
+
+## OSCQuery
+
+启动时先 `GET http://<host>:<oscQueryPort>/?HOST_INFO`，读 `OSC_PORT`。读到就用它当发送端口
+（`vrc_status` 里会标「OSCQuery 发现」），读不到、超时、返回不是 JSON，一律回退到配置的 `outPort`。
+发现失败不影响启动。
 
 ## 调试
 
@@ -175,6 +226,8 @@ node --experimental-strip-types tools/vrc-cli.mjs send "鲸鱼娘来啦" 9000
 | 听不见她 | `voiceDevice` 名字要能匹配到设备；VRChat 麦克风要选 **虚拟麦克风 (VB-Audio Cable A)**，不是扬声器 |
 | 某些机器上 127.0.0.1 的 UDP 发不出去 | 安全软件/加速器可能拦回环。表现是「发了没反应」，但改用本机局域网 IP（如 `192.168.x.x`）作为 `host` 就通。能用就说明是环境问题，不是插件问题 |
 | 她自己复读自己 | TTS 播到 Cable A 的播放端，STT 就不要听 Cable A 的录音端；只 STT 你的真麦 |
+| 第一句语音要等 1~3 秒 | 常驻 worker 在加载 onnx。之后每句 200~400ms；`voiceWorker: false` 会退回「每句都等」 |
+| 换了音频设备没生效 | worker 里缓存了设备索引，重启 World 或把 `voiceWorker` 关一次 |
 
 
 ## 它比发个报文多做了一点

@@ -1,3 +1,10 @@
+> 这是 ERP 演出规则的**模板**。仓库里只放这一份，实际用的那份叫 `ERP_PROMPT.md`（已 gitignore）。
+>
+> 用法：复制成仓库根目录的 `ERP_PROMPT.md`，或者放到任意位置并把路径填进
+> `worlds.vrc.erpPromptFile`。两处都没有时，插件会自动回退到这份模板。
+
+---
+
 VRChat 的 ERP 模式开着。
 
 ## 怎么用

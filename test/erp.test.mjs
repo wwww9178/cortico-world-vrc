@@ -156,3 +156,72 @@ test('只有显式 stop 才结束，中途 stage 推进不打断', () => {
   assert.equal(e.snapshot().lines, 2);
   assert.equal(e.stop().ok, true);
 });
+
+test('状态落盘：重启后接着演（阶段/句数/场景都在）', async () => {
+  const { FileErpStore } = await import('../src/erp.ts');
+  const { mkdtempSync } = await import('node:fs');
+  const { tmpdir } = await import('node:os');
+  const { join } = await import('node:path');
+  const file = join(mkdtempSync(join(tmpdir(), 'erp-state-')), 'state.json');
+
+  const a = new Erp(normalizeErpConfig({ erpEnabled: true }), { store: new FileErpStore(file) });
+  a.start('浴室');
+  a.setStage(2);
+  a.say('第一句');
+
+  const b = new Erp(normalizeErpConfig({ erpEnabled: true }), { store: new FileErpStore(file) });
+  const s = b.snapshot();
+  assert.equal(s.phase, 'active');
+  assert.equal(s.stage, 2);
+  assert.equal(s.scene, '浴室');
+  assert.equal(s.lines, 1);
+});
+
+test('落盘的状态如果已经超时，恢复时直接算 idle', async () => {
+  const { FileErpStore, Erp: E } = await import('../src/erp.ts');
+  const { mkdtempSync } = await import('node:fs');
+  const { tmpdir } = await import('node:os');
+  const { join } = await import('node:path');
+  const file = join(mkdtempSync(join(tmpdir(), 'erp-exp-')), 'state.json');
+
+  let clock = 1_000_000;
+  const cfg = () => normalizeErpConfig({ erpEnabled: true, erpIdleTimeoutSec: 60 });
+  const a = new E(cfg(), { store: new FileErpStore(file), now: () => clock });
+  a.start();
+  a.say('嗯');
+
+  clock += 61_000;
+  const b = new E(cfg(), { store: new FileErpStore(file), now: () => clock });
+  assert.equal(b.snapshot().phase, 'idle');
+});
+
+test('空闲超时会自己收尾，并把阶段参数关掉', () => {
+  let clock = 5_000_000;
+  const e = new Erp(
+    normalizeErpConfig({ erpEnabled: true, erpIdleTimeoutSec: 10, erpParamEnabled: true, erpParamMap: { '1': 'NSFW1' } }),
+    { now: () => clock },
+  );
+  e.start();
+  e.setStage(1);
+  assert.ok(e.timeoutInMs() !== null);
+
+  clock += 11_000;
+  const emit = e.expireIfIdle();
+  assert.ok(emit);
+  assert.equal(e.snapshot().phase, 'idle');
+  assert.deepEqual(emit.params, [{ name: 'NSFW1', value: false }]);
+  assert.match(emit.note, /自动收尾/);
+
+  // 再问一次就没有了
+  assert.equal(e.expireIfIdle(), null);
+});
+
+test('idleTimeoutSec=0 时永不自动收尾', () => {
+  let clock = 1;
+  const e = new Erp(normalizeErpConfig({ erpEnabled: true, erpIdleTimeoutSec: 0 }), { now: () => clock });
+  e.start();
+  clock += 10_000_000;
+  assert.equal(e.timeoutInMs(), null);
+  assert.equal(e.expireIfIdle(), null);
+  assert.equal(e.snapshot().phase, 'active');
+});

@@ -21,6 +21,22 @@ export interface VrcConfig {
   activeWithinSec: number;
   /** 成人向角色扮演。字段细节见 erp.ts。 */
   erp: ErpConfig;
+  /** 用 OSCQuery 自动发现 VRChat 的 OSC 端口，发现失败就回退到 outPort。 */
+  oscQuery: boolean;
+  /** OSCQuery 的 HTTP 端口（VRChat 默认 9001）。 */
+  oscQueryPort: number;
+  /** 语音走常驻 worker（否则每句重新 spawn 一次 python）。 */
+  voiceWorker: boolean;
+  /** 肥鱼 HTTP TTS 端点（voiceProvider=feiyu 时用）。 */
+  feiyuUrl: string;
+  /** voiceMix=voicemeeter 时播到哪个设备（VoiceMeeter 的输入）。 */
+  voicemeeterDevice: string;
+  /** 公开世界里拒绝开 ERP（不知道房间开放度时不受影响）。 */
+  erpRequirePrivate: boolean;
+  /** ERP 演出规则的正文文件；空 = 用包里/示例里的那一份。 */
+  erpPromptFile: string;
+  /** ERP 状态落盘路径；空 = 只存内存。 */
+  erpStateFile: string;
 }
 
 export const VRC_DEFAULTS: VrcConfig = {
@@ -41,6 +57,14 @@ export const VRC_DEFAULTS: VrcConfig = {
   paramEnabled: false,
   activeWithinSec: 120,
   erp: { ...ERP_DEFAULTS, paramMap: { ...ERP_DEFAULTS.paramMap } },
+  oscQuery: true,
+  oscQueryPort: 9001,
+  voiceWorker: true,
+  feiyuUrl: 'http://127.0.0.1:9880/tts',
+  voicemeeterDevice: 'VoiceMeeter Input',
+  erpRequirePrivate: false,
+  erpPromptFile: '',
+  erpStateFile: '',
 };
 
 export function normalizeConfig(raw: Record<string, unknown>): VrcConfig {
@@ -56,7 +80,14 @@ export function normalizeConfig(raw: Record<string, unknown>): VrcConfig {
     cfg.voiceProvider = raw.voiceProvider;
   }
   if (raw.voiceMix === 'voicemeeter' || raw.voiceMix === 'solo') cfg.voiceMix = raw.voiceMix;
-  for (const key of ['chatboxEnabled', 'notifySound', 'typingIndicator', 'voiceEnabled', 'paramEnabled'] as const) {
+  if (typeof raw.feiyuUrl === 'string' && raw.feiyuUrl.trim()) cfg.feiyuUrl = raw.feiyuUrl.trim();
+  if (typeof raw.voicemeeterDevice === 'string' && raw.voicemeeterDevice.trim()) cfg.voicemeeterDevice = raw.voicemeeterDevice.trim();
+  if (typeof raw.erpPromptFile === 'string') cfg.erpPromptFile = raw.erpPromptFile.trim();
+  if (typeof raw.erpStateFile === 'string') cfg.erpStateFile = raw.erpStateFile.trim();
+  for (const key of [
+    'chatboxEnabled', 'notifySound', 'typingIndicator', 'voiceEnabled', 'paramEnabled',
+    'oscQuery', 'voiceWorker', 'erpRequirePrivate',
+  ] as const) {
     if (typeof raw[key] === 'boolean') cfg[key] = raw[key] as boolean;
   }
   cfg.outPort = Math.round(num(raw.outPort, 1, 65535, cfg.outPort));
@@ -64,6 +95,7 @@ export function normalizeConfig(raw: Record<string, unknown>): VrcConfig {
   cfg.chatboxLimit = Math.round(num(raw.chatboxLimit, 32, 144, cfg.chatboxLimit));
   cfg.chatboxIntervalMs = Math.round(num(raw.chatboxIntervalMs, 300, 10000, cfg.chatboxIntervalMs));
   cfg.voiceGain = num(raw.voiceGain, 0, 2, cfg.voiceGain);
+  cfg.oscQueryPort = Math.round(num(raw.oscQueryPort, 1, 65535, cfg.oscQueryPort));
   cfg.activeWithinSec = Math.round(num(raw.activeWithinSec, 10, 3600, cfg.activeWithinSec));
   cfg.erp = normalizeErpConfig(raw);
   return cfg;
@@ -124,6 +156,35 @@ export function vrcConfigGroup(language: Language = 'zh'): ConfigGroup {
         'worlds.vrc.erpParamMap': {
           type: 'object', title: t('阶段 → 参数名', 'Stage → param name'), 'x-hot': true, default: ERP_DEFAULTS.paramMap,
           description: t('例如 {"1":"NSFW1","2":"NSFW2"}；参数名要和你模型里的完全一致。', 'e.g. {"1":"NSFW1","2":"NSFW2"}'),
+        },
+        'worlds.vrc.erpIdleTimeoutSec': {
+          type: 'integer', title: t('多久没动静自动收尾（秒，0=不自动）', 'Auto-end after idle (s, 0 = never)'),
+          minimum: 0, maximum: 86400, 'x-hot': true, default: ERP_DEFAULTS.idleTimeoutSec,
+        },
+        'worlds.vrc.erpRequirePrivate': {
+          type: 'boolean', title: t('公开世界拒绝开 ERP', 'Refuse ERP in public rooms'), 'x-hot': true, default: false,
+          description: t('从 VRChat 日志里读到的房间级别是 public 时不开始。', 'Uses the room access line from the VRChat log.'),
+        },
+        'worlds.vrc.erpPromptFile': {
+          type: 'string', title: t('ERP 规则文件（留空用包内那份）', 'ERP prompt file'), 'x-hot': true, default: '',
+        },
+        'worlds.vrc.erpStateFile': {
+          type: 'string', title: t('ERP 状态落盘路径（留空=不落盘）', 'ERP state file'), 'x-hot': true, default: '',
+        },
+        'worlds.vrc.oscQuery': {
+          type: 'boolean', title: t('OSCQuery 自动发现端口', 'OSCQuery auto-discovery'), 'x-hot': true, default: true,
+        },
+        'worlds.vrc.oscQueryPort': {
+          type: 'integer', title: t('OSCQuery 端口', 'OSCQuery port'), minimum: 1, maximum: 65535, 'x-hot': false, default: 9001,
+        },
+        'worlds.vrc.voiceWorker': {
+          type: 'boolean', title: t('语音常驻 worker（首句慢、之后快）', 'Keep TTS worker alive'), 'x-hot': true, default: true,
+        },
+        'worlds.vrc.feiyuUrl': {
+          type: 'string', title: t('肥鱼 TTS 地址', 'Feiyu TTS URL'), 'x-hot': true, default: 'http://127.0.0.1:9880/tts',
+        },
+        'worlds.vrc.voicemeeterDevice': {
+          type: 'string', title: t('VoiceMeeter 输入设备', 'VoiceMeeter input device'), 'x-hot': true, default: 'VoiceMeeter Input',
         },
       },
     },
