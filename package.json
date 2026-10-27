@@ -1,6 +1,6 @@
 {
   "name": "cortico-world-vrc",
-  "version": "0.1.0",
+  "version": "0.2.0",
   "description": "Coopanion 的 VRChat 世界扩展：经官方 OSC 让桌宠在游戏里说话（chatbox 文字 + 虚拟声卡语音）",
   "type": "module",
   "main": "./src/index.ts",
@@ -13,11 +13,14 @@
     "tools",
     "examples",
     "describe.json",
+    "ENV_PROMPT.md",
+    "ERP_PROMPT.md",
     "README.md",
     "LICENSE",
     "PLAN.md",
     "PUBLISH.md",
-    "test"
+    "test",
+    "CHANGELOG.md"
   ],
   "keywords": [
     "cortico",

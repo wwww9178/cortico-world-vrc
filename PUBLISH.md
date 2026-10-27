@@ -34,9 +34,12 @@ npm publish --access public  # 名字没被占用就能直接发
 发布前自检：
 
 ```bash
-npm run test          # 7 个 OSC 单测
+npm run test          # 30 个单测（OSC / ERP 状态机 / World 出口）
 npm pack --dry-run    # 看会打包哪些文件（不该有 node_modules 和 wav）
 ```
+
+`npm pack --dry-run` 里必须能看到 `ENV_PROMPT.md` 和 `ERP_PROMPT.md` —— 它们不在 `files` 里时
+包能装上但跑起来是空的（`webUi().promptDocs` 指向 `../ENV_PROMPT.md`，读不到就整段没前缀）。
 
 ## 三、发布时建议一起贴的东西
 
@@ -52,3 +55,6 @@ npm pack --dry-run    # 看会打包哪些文件（不该有 node_modules 和 wa
 | VoiceMeeter 混音 | 只有 `voiceMix` 字段，逻辑未写 |
 | OSCQuery 自动发现端口 | 没做，现在靠固定 9000/9001 |
 | macOS / Linux | 未测试，`vrclog.ts` 的路径是 Windows 专用 |
+| ERP 状态持久化 | 只在内存里；world 重启/应用重启后回到 idle（配置里的 `erpStage` 是起始值） |
+| Piper 启动开销 | 每句 spawn 一次 python + 重载 onnx，1~3 秒延迟；ERP 场景下体感明显，未做常驻 worker |
+| 世界公开性判定 | 不知道当前世界是不是 private；`erpChatbox` 全靠人看着关 |

@@ -13,9 +13,16 @@ import { VrcLogTailer } from './vrclog.ts';
 interface QueuedLine {
   text: string;
   voice: boolean;
+  /** 这句要不要走 chatbox。语音附带的条目为 false，避免同一句在聊天框里出现两遍。 */
+  chatbox?: boolean;
   /** 语音这口气：气声/喘息。 */
   whisper?: boolean;
   breath?: boolean;
+}
+
+/** 注入口：换掉 dgram 出口，单测就能断言「到底发出去了什么」。 */
+export interface VrcTransport {
+  send(address: string, ...args: OscArg[]): void;
 }
 
 export class VrcWorld implements World {
@@ -24,6 +31,8 @@ export class VrcWorld implements World {
   private cfg: VrcConfig;
 
   private erp: Erp;
+
+  private transport: VrcTransport | null = null;
 
   private out: Socket | null = null;
 
@@ -52,9 +61,10 @@ export class VrcWorld implements World {
   /** ERP_PROMPT.md 的按 mtime 缓存，免得每拼一次前缀都读盘。 */
   private erpPromptCache: { text: string; mtimeMs: number } | null = null;
 
-  constructor(opts: { cfg?: Record<string, unknown> } = {}) {
+  constructor(opts: { cfg?: Record<string, unknown>; transport?: VrcTransport } = {}) {
     this.cfg = normalizeConfig(opts.cfg ?? {});
     this.erp = new Erp(this.cfg.erp);
+    this.transport = opts.transport ?? null;
   }
 
   async start(): Promise<void> {
@@ -298,13 +308,22 @@ export class VrcWorld implements World {
     return emit.note;
   }
 
-  /** 照 ErpEmit 发货：chatbox 文字、语音、化身参数，互不阻塞。 */
+  /** 照 ErpEmit 发货：台词按 144 字分条进 chatbox，语音单独排队，互不阻塞。 */
   private applyEmit(emit: ErpEmit): void {
     if (!emit.ok) return;
-    if (emit.chatbox) this.chatbox(emit.chatbox);
+    if (emit.chatbox) {
+      for (const line of this.split(emit.chatbox)) {
+        this.queue.push({ text: line, voice: false, chatbox: true });
+      }
+    }
     if (emit.voice) {
-      this.queue.push({ text: emit.voice.text, voice: true, whisper: emit.voice.whisper, breath: emit.voice.breath });
-      void this.pump();
+      this.queue.push({
+        text: emit.voice.text,
+        voice: true,
+        chatbox: false,
+        whisper: emit.voice.whisper,
+        breath: emit.voice.breath,
+      });
     }
     if (emit.params) {
       for (const p of emit.params) {
@@ -312,11 +331,21 @@ export class VrcWorld implements World {
         this.send('/avatar/parameters/' + p.name, p.value);
       }
     }
+    if (this.queue.length) void this.pump();
   }
 
   // ---------- 发送 ----------
 
   private send(address: string, ...args: OscArg[]): void {
+    if (this.transport) {
+      try {
+        this.transport.send(address, ...args);
+        this.sent += 1;
+      } catch {
+        // 注入口抛错不影响主流程
+      }
+      return;
+    }
     if (!this.out) return;
     try {
       const buf = encode(address, ...args);
@@ -356,8 +385,10 @@ export class VrcWorld implements World {
   private async enqueue(text: string, voice: boolean): Promise<string> {
     const lines = this.split(text);
     if (!lines.length) return '没话可说。';
-    if (!this.out) return 'OSC 发送端没起来（world 可能没 start）。';
-    for (const line of lines) this.queue.push({ text: line, voice: voice && this.cfg.voiceEnabled });
+    if (!this.out && !this.transport) return 'OSC 发送端没起来（world 可能没 start）。';
+    for (const line of lines) {
+      this.queue.push({ text: line, voice: voice && this.cfg.voiceEnabled, chatbox: true });
+    }
     void this.pump();
     const voiceNote = voice && this.cfg.voiceEnabled ? '（含语音）' : '';
     return lines.length > 1
@@ -369,25 +400,34 @@ export class VrcWorld implements World {
     if (!this.cfg.voiceEnabled || this.cfg.voiceProvider === 'off') {
       return '语音没开（worlds.vrc.voiceEnabled / voiceProvider 还是关着的）。';
     }
-    this.queue.push({ text: text.trim(), voice: true });
+    this.queue.push({ text: text.trim(), voice: true, chatbox: false });
     void this.pump();
     return `用语音说：「${text.trim()}」`;
   }
 
-  /** 队列泵：按 chatboxIntervalMs 限速，串行发。 */
+  /**
+   * 队列泵：串行发。
+   * 只有真正要进 chatbox 的条目前面才等 chatboxIntervalMs ——
+   * 纯语音（含 ERP 的台词）不该被聊天框限速拖着走，否则一句要等 1.6 秒才出声。
+   */
   private async pump(): Promise<void> {
     if (this.pumping) return;
     this.pumping = true;
     try {
       while (this.queue.length) {
-        const gap = Date.now() - this.lastPumpAt;
-        if (gap < this.cfg.chatboxIntervalMs) {
-          await new Promise((r) => setTimeout(r, this.cfg.chatboxIntervalMs - gap));
-        }
-        const item = this.queue.shift();
+        const item = this.queue[0];
         if (!item) break;
-        this.chatbox(item.text);
-        this.lastPumpAt = Date.now();
+        if (item.chatbox) {
+          const gap = Date.now() - this.lastPumpAt;
+          if (gap < this.cfg.chatboxIntervalMs) {
+            await new Promise((r) => setTimeout(r, this.cfg.chatboxIntervalMs - gap));
+          }
+        }
+        this.queue.shift();
+        if (item.chatbox) {
+          this.chatbox(item.text);
+          this.lastPumpAt = Date.now();
+        }
         if (item.voice) await this.speak(item.text, { whisper: item.whisper, breath: item.breath });
       }
     } finally {
